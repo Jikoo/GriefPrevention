@@ -713,17 +713,17 @@ public class EntityEventHandler implements Listener
         if (isIgnoredEntity(event)) return;
 
         // Protected death loot can't be destroyed, only picked up or despawned due to expiration.
-        if (isProtectedDrop(event)) return;
+        if (handleProtectedDrop(event)) return;
 
         // Protect pets from environmental damage types which could be easily caused by griefers.
-        if (isPetEnvironmentalDamage(event)) return;
+        if (handlePetEnvironmentalDamage(event)) return;
 
-        //the rest is only interested in entities damaging entities (ignoring environmental damage)
+        // All other handling specifically is for entities damaging other entities.
         if (!(event instanceof EntityDamageByEntityEvent)) return;
 
         EntityDamageByEntityEvent subEvent = (EntityDamageByEntityEvent) event;
 
-        // TODO: review lightning handling - currently may not be usable in PVP at all
+        // TODO: review lightning handling - currently may not be usable in PvP at all
         if (subEvent.getDamager() instanceof LightningStrike && subEvent.getDamager().hasMetadata("GP_TRIDENT"))
         {
             event.setCancelled(true);
@@ -752,14 +752,14 @@ public class EntityEventHandler implements Listener
 
         PvPProtectionState defenderPvPSafe = isPvPProtected(event.getEntity());
 
-        // Protect players from lingering potion damage when protected from PVP.
+        // Protect players from lingering potion damage when protected from PvP.
         if (damageSource.getType() == EntityType.AREA_EFFECT_CLOUD && defenderPvPSafe != PvPProtectionState.NONE)
         {
             event.setCancelled(true);
             return;
         }
 
-        // TODO: discuss this previously nonfunctional code - disables fireworks from crossbows in worlds not running PVP rules
+        // TODO: discuss this previously nonfunctional code - disables fireworks from crossbows in worlds not running PvP rules
         //if the attacker is a firework from a crossbow by a player and defender is a player (nonpvp)
         if (projectile != null && projectile.getType() == EntityType.FIREWORK
                 && event.getEntityType() == EntityType.PLAYER && !GriefPrevention.instance.pvpRulesApply(projectile.getWorld()))
@@ -772,38 +772,8 @@ public class EntityEventHandler implements Listener
             }
         }
 
-        // Protect qualifying players from PVP damage.
-        if (attacker != null && event.getEntity() instanceof Player)
-        {
-            // Handle defender protected from PVP first, protection already calculated.
-             if (defenderPvPSafe == PvPProtectionState.FRESH_SPAWN)
-             {
-                 event.setCancelled(true);
-                 if (sendErrorMessagesToPlayers)
-                     GriefPrevention.sendMessage(attacker, TextMode.Err, Messages.ThatPlayerPvPImmune);
-                 return;
-             }
-             else if (defenderPvPSafe == PvPProtectionState.CLAIM)
-             {
-                 event.setCancelled(true);
-                 if (sendErrorMessagesToPlayers)
-                     GriefPrevention.sendMessage(attacker, TextMode.Err, Messages.PlayerInPvPSafeZone);
-             }
-
-            PvPProtectionState attackerPvPSafe = isPvPProtected(attacker);
-
-             // Also prevent attack if defender cannot retaliate unless protection is from a claim and attacker is ignoring claims.
-            if (attackerPvPSafe == PvPProtectionState.CLAIM && !this.dataStore.getPlayerData(attacker.getUniqueId()).ignoreClaims
-                    || attackerPvPSafe == PvPProtectionState.FRESH_SPAWN)
-            {
-                event.setCancelled(true);
-                if (sendErrorMessagesToPlayers)
-                    GriefPrevention.sendMessage(attacker, TextMode.Err, Messages.CantFightWhileImmune);
-                return;
-            }
-
-            return;
-        }
+        // Protect qualifying players from PvP damage.
+        if (isPvP(event, attacker, defenderPvPSafe, sendErrorMessagesToPlayers)) return;
 
         //don't track in worlds where claims are not enabled
         if (!GriefPrevention.instance.claimsEnabledForWorld(event.getEntity().getWorld())) return;
@@ -1063,7 +1033,7 @@ public class EntityEventHandler implements Listener
      * @param event the EntityDamageEvent
      * @return true if GriefPrevention is protecting an item and the event has been handled
      */
-    private boolean isProtectedDrop(EntityDamageEvent event) {
+    private boolean handleProtectedDrop(EntityDamageEvent event) {
         if (event.getEntityType() == EntityType.DROPPED_ITEM && event.getEntity().hasMetadata("GP_ITEMOWNER"))
         {
             event.setCancelled(true);
@@ -1078,7 +1048,7 @@ public class EntityEventHandler implements Listener
      * @param event the EntityDamageEvent
      * @return true if GriefPrevention is protecting a pet and the event has been handled
      */
-    private boolean isPetEnvironmentalDamage(EntityDamageEvent event)
+    private boolean handlePetEnvironmentalDamage(EntityDamageEvent event)
     {
         if (!(event.getEntity() instanceof Tameable)
                 || GriefPrevention.instance.pvpRulesApply(event.getEntity().getWorld()))
@@ -1106,16 +1076,17 @@ public class EntityEventHandler implements Listener
     }
 
     /**
-     * Helper method for checking if an entity is a Player who should not be harmed by PVP damage.
+     * Helper method for checking if an entity is a Player who should not be harmed by PvP damage.
+     *
      * @param entity the Entity
-     * @return true if the Entity is a Player protected from PVP
+     * @return true if the Entity is a Player protected from PvP
      */
     private PvPProtectionState isPvPProtected(Entity entity)
     {
         // Ensure entity is a player.
         if (!(entity instanceof Player)) return PvPProtectionState.NONE;
 
-        // Ensure PVP rules are enabled in world.
+        // Ensure PvP rules are enabled in world.
         if (!GriefPrevention.instance.pvpRulesApply(entity.getWorld())) return PvPProtectionState.NONE;
 
         Player player = (Player) entity;
@@ -1125,19 +1096,21 @@ public class EntityEventHandler implements Listener
         if (GriefPrevention.instance.config_pvp_protectFreshSpawns && playerData.pvpImmune)
             return PvPProtectionState.FRESH_SPAWN;
 
-        // PVP may also be disabled in some claims.
-        Claim damagedClaim = GriefPrevention.instance.dataStore.getClaimAt(player.getLocation(), false, playerData.lastClaim);
+        // If claims are not enabled, don't attempt to check for claim protection.
+        if (!GriefPrevention.instance.claimsEnabledForWorld(player.getWorld())) return PvPProtectionState.NONE;
 
-        // If player is not in a claim, the area is not a PVP safe zone.
-        if (damagedClaim == null) return PvPProtectionState.NONE;
+        Claim claim = GriefPrevention.instance.dataStore.getClaimAt(player.getLocation(), false, playerData.lastClaim);
 
-        playerData.lastClaim = damagedClaim;
+        // If player is not in a claim, the area is not a PvP safe zone.
+        if (claim == null) return PvPProtectionState.NONE;
 
-        // If the claim is not a PVP safe zone, the player is not protected.
-        if (!GriefPrevention.instance.claimIsPvPSafeZone(damagedClaim)) return PvPProtectionState.NONE;
+        playerData.lastClaim = claim;
 
-        // Call PreventPVPEvent to allow addons to modify PVP.
-        PreventPvPEvent pvpEvent = new PreventPvPEvent(damagedClaim);
+        // If the claim is not a PvP safe zone, the player is not protected.
+        if (!GriefPrevention.instance.claimIsPvPSafeZone(claim)) return PvPProtectionState.NONE;
+
+        // Call PreventPvPEvent to allow addons to modify PvP.
+        PreventPvPEvent pvpEvent = new PreventPvPEvent(claim);
         Bukkit.getPluginManager().callEvent(pvpEvent);
 
         // If the event is cancelled, the player is not protected.
@@ -1147,8 +1120,57 @@ public class EntityEventHandler implements Listener
         return PvPProtectionState.CLAIM;
     }
 
-    private enum PvPProtectionState {
+    private enum PvPProtectionState
+    {
         NONE, FRESH_SPAWN, CLAIM
+    }
+
+    /**
+     * Helper method for handling an EntityDamageEvent if it is considered PvP.
+     *
+     * @param event the EntityDamageEvent to handle
+     * @param attacker the attacking player, if any
+     * @param defenderSafe the type of PvP protection the defender has, if any
+     * @param sendErrors whether or not the attacker should be sent messages when damage is prevented
+     *
+     * @return true if the EntityDamageEvent is PvP damage
+     */
+    private boolean isPvP(EntityDamageEvent event, Player attacker, PvPProtectionState defenderSafe, boolean sendErrors)
+    {
+        if (attacker == null || !(event.getEntity() instanceof Player)) return false;
+
+        // Handle defender protected from PvP first, protection already calculated.
+        if (defenderSafe == PvPProtectionState.FRESH_SPAWN)
+        {
+            return cancelPvP(event, attacker, Messages.ThatPlayerPvPImmune, sendErrors);
+        }
+
+        if (defenderSafe == PvPProtectionState.CLAIM)
+        {
+            return cancelPvP(event, attacker, Messages.PlayerInPvPSafeZone, sendErrors);
+        }
+
+        PvPProtectionState attackerPvPSafe = isPvPProtected(attacker);
+
+        // Also prevent attack if defender cannot retaliate unless protection is from a claim and attacker is ignoring claims.
+        if (attackerPvPSafe == PvPProtectionState.CLAIM && !this.dataStore.getPlayerData(attacker.getUniqueId()).ignoreClaims
+                || attackerPvPSafe == PvPProtectionState.FRESH_SPAWN)
+        {
+            return cancelPvP(event, attacker, Messages.CantFightWhileImmune, sendErrors);
+        }
+
+        return true;
+    }
+
+    /**
+     * Helper method for cancelling PvP damage and sending errors. Always returns true.
+     */
+    private boolean cancelPvP(EntityDamageEvent event, Player attacker, Messages error, boolean sendErrors)
+    {
+        event.setCancelled(true);
+        if (sendErrors)
+            GriefPrevention.sendMessage(attacker, TextMode.Err, error);
+        return true;
     }
 
     //when an entity is damaged
