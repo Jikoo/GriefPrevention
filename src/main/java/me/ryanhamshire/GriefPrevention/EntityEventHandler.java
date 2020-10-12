@@ -34,7 +34,6 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Explosive;
 import org.bukkit.entity.FallingBlock;
-import org.bukkit.entity.Firework;
 import org.bukkit.entity.Horse;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.LightningStrike;
@@ -72,7 +71,6 @@ import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.entity.EntityInteractEvent;
 import org.bukkit.event.entity.EntityPortalEnterEvent;
 import org.bukkit.event.entity.EntityPortalExitEvent;
-import org.bukkit.event.entity.EntityShootBowEvent;
 import org.bukkit.event.entity.EntityTargetEvent;
 import org.bukkit.event.entity.ExpBottleEvent;
 import org.bukkit.event.entity.ItemMergeEvent;
@@ -708,84 +706,45 @@ public class EntityEventHandler implements Listener
 
     private void handleEntityDamageEvent(EntityDamageEvent event, boolean sendErrorMessagesToPlayers)
     {
-        //monsters are never protected
+        // Monsters are never protected.
         if (isMonster(event.getEntity())) return;
 
-        //horse protections can be disabled
-        if (event.getEntity() instanceof Horse && !GriefPrevention.instance.config_claims_protectHorses) return;
-        if (event.getEntity() instanceof Donkey && !GriefPrevention.instance.config_claims_protectDonkeys) return;
-        if (event.getEntity() instanceof Mule && !GriefPrevention.instance.config_claims_protectDonkeys) return;
-        if (event.getEntity() instanceof Llama && !GriefPrevention.instance.config_claims_protectLlamas) return;
-        //protected death loot can't be destroyed, only picked up or despawned due to expiration
-        if (event.getEntityType() == EntityType.DROPPED_ITEM)
-        {
-            if (event.getEntity().hasMetadata("GP_ITEMOWNER"))
-            {
-                event.setCancelled(true);
-            }
-        }
+        // Certain entity types can be configured to be ignored in favor of other plugins' protection systems.
+        if (isIgnoredEntity(event)) return;
 
-        //protect pets from environmental damage types which could be easily caused by griefers
-        if (event.getEntity() instanceof Tameable && !GriefPrevention.instance.pvpRulesApply(event.getEntity().getWorld()))
-        {
-            Tameable tameable = (Tameable) event.getEntity();
-            if (tameable.isTamed())
-            {
-                DamageCause cause = event.getCause();
-                if (cause == DamageCause.ENTITY_EXPLOSION
-                        || cause == DamageCause.FALLING_BLOCK
-                        || cause == DamageCause.FIRE
-                        || cause == DamageCause.FIRE_TICK
-                        || cause == DamageCause.LAVA
-                        || cause == DamageCause.SUFFOCATION
-                        || cause == DamageCause.CONTACT
-                        || cause == DamageCause.DROWNING)
-                {
-                    event.setCancelled(true);
-                    return;
-                }
-            }
-        }
+        // Protected death loot can't be destroyed, only picked up or despawned due to expiration.
+        if (isProtectedDrop(event)) return;
+
+        // Protect pets from environmental damage types which could be easily caused by griefers.
+        if (isPetEnvironmentalDamage(event)) return;
 
         //the rest is only interested in entities damaging entities (ignoring environmental damage)
         if (!(event instanceof EntityDamageByEntityEvent)) return;
 
         EntityDamageByEntityEvent subEvent = (EntityDamageByEntityEvent) event;
 
+        // TODO: review lightning handling - currently may not be usable in PVP at all
         if (subEvent.getDamager() instanceof LightningStrike && subEvent.getDamager().hasMetadata("GP_TRIDENT"))
         {
             event.setCancelled(true);
             return;
         }
+
         //determine which player is attacking, if any
         Player attacker = null;
-        Projectile arrow = null;
-        Firework firework = null;
+        Projectile projectile = null;
         Entity damageSource = subEvent.getDamager();
 
         if (damageSource.getType() == EntityType.PLAYER)
         {
             attacker = (Player) damageSource;
         }
-        else if (subEvent.getDamager() instanceof Firework)
-        {
-            damageSource = subEvent.getDamager();
-            if (damageSource.hasMetadata("GP_FIREWORK"))
-            {
-                List<MetadataValue> data = damageSource.getMetadata("GP_FIREWORK");
-                if (data.size() > 0)
-                {
-                    firework = (Firework) damageSource;
-                    attacker = (Player) data.get(0).value();
-                }
-            }
-        }
         if (damageSource instanceof Projectile)
         {
-            arrow = (Projectile) damageSource;
-            if (arrow.getShooter() instanceof Player)
+            projectile = (Projectile) damageSource;
+            if (projectile.getShooter() instanceof Player)
             {
-                attacker = (Player) arrow.getShooter();
+                attacker = (Player) projectile.getShooter();
             }
         }
 
@@ -821,7 +780,8 @@ public class EntityEventHandler implements Listener
         }
 
         //if the attacker is a firework from a crossbow by a player and defender is a player (nonpvp)
-        if (firework != null && event.getEntityType() == EntityType.PLAYER && !GriefPrevention.instance.pvpRulesApply(firework.getWorld()))
+        if (projectile != null && projectile.getType() == EntityType.FIREWORK
+                && event.getEntityType() == EntityType.PLAYER && !GriefPrevention.instance.pvpRulesApply(projectile.getWorld()))
         {
             Player defender = (Player) (event.getEntity());
             if (attacker != defender)
@@ -1121,7 +1081,7 @@ public class EntityEventHandler implements Listener
                         event.setCancelled(true);
 
                         //kill the arrow to avoid infinite bounce between crowded together animals //RoboMWM: except for tridents
-                        if (arrow != null && arrow.getType() != EntityType.TRIDENT) arrow.remove();
+                        if (projectile != null && projectile.getType() != EntityType.TRIDENT) projectile.remove();
                         if (damageSource.getType() == EntityType.FIREWORK && event.getEntity().getType() != EntityType.PLAYER)
                             return;
 
@@ -1142,18 +1102,74 @@ public class EntityEventHandler implements Listener
         }
     }
 
-    @EventHandler(ignoreCancelled = true, priority = EventPriority.LOWEST)
-    public void onCrossbowFireWork(EntityShootBowEvent shootEvent)
+    /**
+     * Helper method for checking if a damaged entity is configured to not be handled by GriefPrevention.
+     *
+     * @param event the EntityDamageEvent
+     * @return true if GriefPrevention is configured to not handle the damage event
+     */
+    private boolean isIgnoredEntity(EntityDamageEvent event)
     {
-        if (shootEvent.getEntity() instanceof Player && shootEvent.getProjectile() instanceof Firework)
+        //horse protections can be disabled
+        if (event.getEntity() instanceof Horse && !GriefPrevention.instance.config_claims_protectHorses) return true;
+        if (event.getEntity() instanceof Donkey && !GriefPrevention.instance.config_claims_protectDonkeys) return true;
+        if (event.getEntity() instanceof Mule && !GriefPrevention.instance.config_claims_protectDonkeys) return true;
+        if (event.getEntity() instanceof Llama && !GriefPrevention.instance.config_claims_protectLlamas) return true;
+
+        return false;
+    }
+
+    /**
+     * Helper method for checking if a damaged entity is a dropped item protected by GriefPrevention.
+     *
+     * @param event the EntityDamageEvent
+     * @return true if GriefPrevention is protecting an item and the event has been handled
+     */
+    private boolean isProtectedDrop(EntityDamageEvent event) {
+        if (event.getEntityType() == EntityType.DROPPED_ITEM && event.getEntity().hasMetadata("GP_ITEMOWNER"))
         {
-            shootEvent.getProjectile().setMetadata("GP_FIREWORK", new FixedMetadataValue(GriefPrevention.instance, shootEvent.getEntity()));
+            event.setCancelled(true);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Helper method for checking if a damaged entity is a tamed animal protected by GriefPrevention.
+     *
+     * @param event the EntityDamageEvent
+     * @return true if GriefPrevention is protecting a pet and the event has been handled
+     */
+    private boolean isPetEnvironmentalDamage(EntityDamageEvent event)
+    {
+        if (!(event.getEntity() instanceof Tameable)
+                || GriefPrevention.instance.pvpRulesApply(event.getEntity().getWorld()))
+            return false;
+
+        Tameable tameable = (Tameable) event.getEntity();
+
+        if (!tameable.isTamed()) return false;
+
+        switch (event.getCause())
+        {
+            case ENTITY_EXPLOSION:
+            case FALLING_BLOCK:
+            case FIRE:
+            case FIRE_TICK:
+            case LAVA:
+            case SUFFOCATION:
+            case CONTACT:
+            case DROWNING:
+                event.setCancelled(true);
+                return true;
+            default:
+                return false;
         }
     }
 
     //when an entity is damaged
     @EventHandler(ignoreCancelled = true, priority = EventPriority.MONITOR)
-    public void onEntityDamageMonitor(EntityDamageEvent event)
+    public void onEntityDamageMonitor(EntityDamageByEntityEvent event)
     {
         //FEATURE: prevent players who very recently participated in pvp combat from hiding inventory to protect it from looting
         //FEATURE: prevent players who are in pvp combat from logging out to avoid being defeated
@@ -1162,35 +1178,19 @@ public class EntityEventHandler implements Listener
 
         Player defender = (Player) event.getEntity();
 
-        //only interested in entities damaging entities (ignoring environmental damage)
-        if (!(event instanceof EntityDamageByEntityEvent)) return;
-
         //Ignore "damage" from snowballs, eggs, etc. from triggering the PvP timer
         if (event.getDamage() == 0) return;
-
-        EntityDamageByEntityEvent subEvent = (EntityDamageByEntityEvent) event;
 
         //if not in a pvp rules world, do nothing
         if (!GriefPrevention.instance.pvpRulesApply(defender.getWorld())) return;
 
         //determine which player is attacking, if any
         Player attacker = null;
-        Entity damageSource = subEvent.getDamager();
+        Entity damageSource = event.getDamager();
 
         if (damageSource.getType() == EntityType.PLAYER)
         {
             attacker = (Player) damageSource;
-        }
-        else if (damageSource instanceof Firework)
-        {
-            if (damageSource.hasMetadata("GP_FIREWORK"))
-            {
-                List<MetadataValue> data = damageSource.getMetadata("GP_FIREWORK");
-                if (data.size() > 0)
-                {
-                    attacker = (Player) data.get(0).value();
-                }
-            }
         }
         else if (damageSource instanceof Projectile)
         {
@@ -1250,17 +1250,6 @@ public class EntityEventHandler implements Listener
                 if (arrow.getShooter() instanceof Player)
                 {
                     attacker = (Player) arrow.getShooter();
-                }
-            }
-            else if (damageSource instanceof Firework)
-            {
-                if (damageSource.hasMetadata("GP_FIREWORK"))
-                {
-                    List<MetadataValue> data = damageSource.getMetadata("GP_FIREWORK");
-                    if (data != null && data.size() > 0)
-                    {
-                        attacker = (Player) data.get(0).value();
-                    }
                 }
             }
         }
