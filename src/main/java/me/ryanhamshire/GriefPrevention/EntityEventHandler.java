@@ -776,44 +776,8 @@ public class EntityEventHandler implements Listener
         //don't track in worlds where claims are not enabled
         if (!GriefPrevention.instance.claimsEnabledForWorld(event.getEntity().getWorld())) return;
 
-        // Protect players from others' pets when protected from pvp.
-        if (event.getEntityType() == EntityType.PLAYER)
-        {
-            Player defender = (Player) event.getEntity();
-
-            //if attacker is a pet
-            Entity damager = subEvent.getDamager();
-            if (damager instanceof Tameable)
-            {
-                Tameable pet = (Tameable) damager;
-                if (pet.isTamed() && pet.getOwner() != null)
-                {
-                    //if defender is NOT in pvp combat and not immune to pvp right now due to recent respawn
-                    PlayerData defenderData = GriefPrevention.instance.dataStore.getPlayerData(event.getEntity().getUniqueId());
-                    if (!defenderData.pvpImmune && !defenderData.inPvpCombat())
-                    {
-                        //if defender is not in a protected area
-                        Claim defenderClaim = this.dataStore.getClaimAt(defender.getLocation(), false, defenderData.lastClaim);
-                        if (defenderClaim != null &&
-                                !defenderData.inPvpCombat() &&
-                                GriefPrevention.instance.claimIsPvPSafeZone(defenderClaim))
-                        {
-                            defenderData.lastClaim = defenderClaim;
-                            PreventPvPEvent pvpEvent = new PreventPvPEvent(defenderClaim);
-                            Bukkit.getPluginManager().callEvent(pvpEvent);
-
-                            //if other plugins aren't making an exception to the rule
-                            if (!pvpEvent.isCancelled())
-                            {
-                                event.setCancelled(true);
-                                pet.setTarget(null);
-                            }
-                            return;
-                        }
-                    }
-                }
-            }
-        }
+        // Protect players from others' pets when protected from pvp. TODO pets are not protected from PvP-safe players, seems off
+        if (handlePetPvP(subEvent)) return;
 
         //if the damaged entity is a claimed item frame or armor stand, the damager needs to be a player with build trust in the claim
         if (subEvent.getEntityType() == EntityType.ITEM_FRAME
@@ -1127,7 +1091,7 @@ public class EntityEventHandler implements Listener
     }
 
     /**
-     * Helper method for handling an EntityDamageEvent if it is considered PvP.
+     * Helper method for handling an EntityDamageByEntityEvent if it is considered PvP.
      *
      * @param event the EntityDamageEvent to handle
      * @param attacker the attacking player, if any
@@ -1139,10 +1103,10 @@ public class EntityEventHandler implements Listener
     {
         if (attacker == null || !(event.getEntity() instanceof Player)) return false;
 
-        PvPProtectionState defenderSafe = isPvPProtected(event.getEntity());
+        PvPProtectionState defenderState = isPvPProtected(event.getEntity());
 
         // Protect freshly spawned players.
-        if (defenderSafe == PvPProtectionState.FRESH_SPAWN)
+        if (defenderState == PvPProtectionState.FRESH_SPAWN)
         {
             return cancelPvP(event, attacker, Messages.ThatPlayerPvPImmune, sendErrors);
         }
@@ -1150,16 +1114,16 @@ public class EntityEventHandler implements Listener
         boolean attackerIgnoringClaims = this.dataStore.getPlayerData(attacker.getUniqueId()).ignoreClaims;
 
         // Unless attacker is ignoring claims, respect claim protections.
-        if (!attackerIgnoringClaims && defenderSafe == PvPProtectionState.CLAIM)
+        if (!attackerIgnoringClaims && defenderState == PvPProtectionState.CLAIM)
         {
             return cancelPvP(event, attacker, Messages.PlayerInPvPSafeZone, sendErrors);
         }
 
-        PvPProtectionState attackerPvPSafe = isPvPProtected(attacker);
+        PvPProtectionState attackerState = isPvPProtected(attacker);
 
         // Also prevent attack if defender cannot retaliate unless protection is from a claim and attacker is ignoring claims.
-        if (!attackerIgnoringClaims && attackerPvPSafe == PvPProtectionState.CLAIM
-                || attackerPvPSafe == PvPProtectionState.FRESH_SPAWN)
+        if (!attackerIgnoringClaims && attackerState == PvPProtectionState.CLAIM
+                || attackerState == PvPProtectionState.FRESH_SPAWN)
         {
             return cancelPvP(event, attacker, Messages.CantFightWhileImmune, sendErrors);
         }
@@ -1175,6 +1139,32 @@ public class EntityEventHandler implements Listener
         event.setCancelled(true);
         if (sendErrors)
             GriefPrevention.sendMessage(attacker, TextMode.Err, error);
+        return true;
+    }
+
+    /**
+     * Helper method for handling an EntityDamageByEntityEvent if it is an owned pet engaging in PvP combat.
+     *
+     * @param event the EntityDamageByEntityEvent
+     * @return true if the attack is a pet engaging in PvP
+     */
+    private boolean handlePetPvP(EntityDamageByEntityEvent event)
+    {
+        // Ensure damager is a pet.
+        if (!(event.getDamager() instanceof Tameable)) return false;
+
+        Tameable pet = (Tameable) event.getDamager();
+
+        // Ensure pet is owned.
+        if (!pet.isTamed() || pet.getOwner() == null) return false;
+
+        PvPProtectionState defenderState = isPvPProtected(event.getEntity());
+
+        // Ensure defender is protected from PvP.
+        if (defenderState == PvPProtectionState.NONE) return false;
+
+        event.setCancelled(true);
+        pet.setTarget(null);
         return true;
     }
 
@@ -1213,19 +1203,16 @@ public class EntityEventHandler implements Listener
         }
 
         //if attacker not a player, do nothing
-        if (attacker == null) return;
+        if (attacker == null || attacker.getUniqueId().equals(defender.getUniqueId())) return;
 
         PlayerData defenderData = this.dataStore.getPlayerData(defender.getUniqueId());
         PlayerData attackerData = this.dataStore.getPlayerData(attacker.getUniqueId());
 
-        if (attacker != defender)
-        {
-            long now = Calendar.getInstance().getTimeInMillis();
-            defenderData.lastPvpTimestamp = now;
-            defenderData.lastPvpPlayer = attacker.getName();
-            attackerData.lastPvpTimestamp = now;
-            attackerData.lastPvpPlayer = defender.getName();
-        }
+        long now = Calendar.getInstance().getTimeInMillis();
+        defenderData.lastPvpTimestamp = now;
+        defenderData.lastPvpPlayer = attacker.getName();
+        attackerData.lastPvpTimestamp = now;
+        attackerData.lastPvpPlayer = defender.getName();
     }
 
     //when a vehicle is damaged
