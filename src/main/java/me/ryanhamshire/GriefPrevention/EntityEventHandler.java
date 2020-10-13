@@ -83,6 +83,7 @@ import org.bukkit.event.hanging.HangingPlaceEvent;
 import org.bukkit.event.vehicle.VehicleDamageEvent;
 import org.bukkit.event.weather.LightningStrikeEvent;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.Merchant;
 import org.bukkit.metadata.FixedMetadataValue;
 import org.bukkit.metadata.MetadataValue;
 import org.bukkit.persistence.PersistentDataType;
@@ -709,7 +710,7 @@ public class EntityEventHandler implements Listener
         // Monsters are never protected.
         if (isMonster(event.getEntity())) return;
 
-        // Certain entity types can be configured to be ignored in favor of other plugins' protection systems.
+        // Certain entity types can be configured to be ignored.
         if (isIgnoredEntity(event)) return;
 
         // Protected death loot can't be destroyed, only picked up or despawned due to expiration.
@@ -750,10 +751,8 @@ public class EntityEventHandler implements Listener
             }
         }
 
-        PvPProtectionState defenderPvPSafe = isPvPProtected(event.getEntity());
-
         // Protect players from lingering potion damage when protected from PvP.
-        if (damageSource.getType() == EntityType.AREA_EFFECT_CLOUD && defenderPvPSafe != PvPProtectionState.NONE)
+        if (damageSource.getType() == EntityType.AREA_EFFECT_CLOUD && isPvPProtected(event.getEntity()) != PvPProtectionState.NONE)
         {
             event.setCancelled(true);
             return;
@@ -773,12 +772,12 @@ public class EntityEventHandler implements Listener
         }
 
         // Protect qualifying players from PvP damage.
-        if (isPvP(event, attacker, defenderPvPSafe, sendErrorMessagesToPlayers)) return;
+        if (handlePvP(subEvent, attacker, sendErrorMessagesToPlayers)) return;
 
         //don't track in worlds where claims are not enabled
         if (!GriefPrevention.instance.claimsEnabledForWorld(event.getEntity().getWorld())) return;
 
-        //protect players from being attacked by other players' pets when protected from pvp
+        // Protect players from others' pets when protected from pvp.
         if (event.getEntityType() == EntityType.PLAYER)
         {
             Player defender = (Player) event.getEntity();
@@ -1130,22 +1129,26 @@ public class EntityEventHandler implements Listener
      *
      * @param event the EntityDamageEvent to handle
      * @param attacker the attacking player, if any
-     * @param defenderSafe the type of PvP protection the defender has, if any
      * @param sendErrors whether or not the attacker should be sent messages when damage is prevented
      *
      * @return true if the EntityDamageEvent is PvP damage
      */
-    private boolean isPvP(EntityDamageEvent event, Player attacker, PvPProtectionState defenderSafe, boolean sendErrors)
+    private boolean handlePvP(EntityDamageByEntityEvent event, Player attacker, boolean sendErrors)
     {
         if (attacker == null || !(event.getEntity() instanceof Player)) return false;
 
-        // Handle defender protected from PvP first, protection already calculated.
+        PvPProtectionState defenderSafe = isPvPProtected(event.getEntity());
+
+        // Protect freshly spawned players.
         if (defenderSafe == PvPProtectionState.FRESH_SPAWN)
         {
             return cancelPvP(event, attacker, Messages.ThatPlayerPvPImmune, sendErrors);
         }
 
-        if (defenderSafe == PvPProtectionState.CLAIM)
+        boolean attackerIgnoringClaims = this.dataStore.getPlayerData(attacker.getUniqueId()).ignoreClaims;
+
+        // Unless attacker is ignoring claims, respect claim protections.
+        if (!attackerIgnoringClaims && defenderSafe == PvPProtectionState.CLAIM)
         {
             return cancelPvP(event, attacker, Messages.PlayerInPvPSafeZone, sendErrors);
         }
@@ -1153,7 +1156,7 @@ public class EntityEventHandler implements Listener
         PvPProtectionState attackerPvPSafe = isPvPProtected(attacker);
 
         // Also prevent attack if defender cannot retaliate unless protection is from a claim and attacker is ignoring claims.
-        if (attackerPvPSafe == PvPProtectionState.CLAIM && !this.dataStore.getPlayerData(attacker.getUniqueId()).ignoreClaims
+        if (!attackerIgnoringClaims && attackerPvPSafe == PvPProtectionState.CLAIM
                 || attackerPvPSafe == PvPProtectionState.FRESH_SPAWN)
         {
             return cancelPvP(event, attacker, Messages.CantFightWhileImmune, sendErrors);
