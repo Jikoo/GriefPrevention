@@ -723,7 +723,7 @@ public class EntityEventHandler implements Listener
 
         EntityDamageByEntityEvent subEvent = (EntityDamageByEntityEvent) event;
 
-        // TODO: review lightning handling - currently may not be usable in PvP at all
+        // TODO: debug & discuss lightning handling - currently not usable in PvP at all
         if (subEvent.getDamager() instanceof LightningStrike && subEvent.getDamager().hasMetadata("GP_TRIDENT"))
         {
             event.setCancelled(true);
@@ -1076,7 +1076,7 @@ public class EntityEventHandler implements Listener
 
         Entity damageSource = event.getDamager();
 
-        // If attacker is not available and damage is not likely sourced from a malicious player, allow.
+        // If attacker is not a player and damage is not likely sourced indirectly from a player, allow.
         if (attacker == null
                 && damageSource.getType() != EntityType.CREEPER
                 && damageSource.getType() != EntityType.WITHER
@@ -1138,7 +1138,6 @@ public class EntityEventHandler implements Listener
             // Tridents can be retrieved and are hard to obtain. Remove velocity and teleport beneath.
             if (projectile.getType() == EntityType.TRIDENT)
             {
-                // TODO test this crap
                 projectile.setVelocity(new Vector(0, 0, 0));
                 projectile.teleport(event.getEntity().getLocation());
                 projectile.setBounce(false);
