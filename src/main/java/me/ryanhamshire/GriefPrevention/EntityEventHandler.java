@@ -776,53 +776,11 @@ public class EntityEventHandler implements Listener
         //don't track in worlds where claims are not enabled
         if (!GriefPrevention.instance.claimsEnabledForWorld(event.getEntity().getWorld())) return;
 
-        // Protect players from others' pets when protected from pvp. TODO pets are not protected from PvP-safe players, seems off
-        if (handlePetPvP(subEvent)) return;
+        // Protect players from others' pets when protected from pvp.
+        if (handlePetDamagerPvP(subEvent)) return;
 
-        //if the damaged entity is a claimed item frame or armor stand, the damager needs to be a player with build trust in the claim
-        if (subEvent.getEntityType() == EntityType.ITEM_FRAME
-                || subEvent.getEntityType() == EntityType.ARMOR_STAND
-                || subEvent.getEntityType() == EntityType.VILLAGER
-                || subEvent.getEntityType() == EntityType.ENDER_CRYSTAL)
-        {
-
-            //decide whether it's claimed
-            Claim cachedClaim = null;
-            if (attacker != null)
-            {
-                PlayerData playerData = this.dataStore.getPlayerData(attacker.getUniqueId());
-                cachedClaim = playerData.lastClaim;
-            }
-
-            Claim claim = this.dataStore.getClaimAt(event.getEntity().getLocation(), false, cachedClaim);
-
-            //if it's claimed
-            if (claim != null)
-            {
-                //if attacker isn't a player, cancel
-                if (attacker == null)
-                {
-                    //exception case
-                    if (event.getEntityType() == EntityType.VILLAGER && damageSource instanceof Zombie)
-                    {
-                        return;
-                    }
-
-                    event.setCancelled(true);
-                    return;
-                }
-
-                //otherwise player must have container trust in the claim
-                String failureReason = claim.allowBuild(attacker, Material.AIR);
-                if (failureReason != null)
-                {
-                    event.setCancelled(true);
-                    if (sendErrorMessagesToPlayers)
-                        GriefPrevention.sendMessage(attacker, TextMode.Err, failureReason);
-                    return;
-                }
-            }
-        }
+        // Claimed entities used for display/container/trading purposes can only be hurt by a player with build trust.
+        if (handleContainerEntity(subEvent, attacker, sendErrorMessagesToPlayers)) return;
 
         //if entity is tameable and has an owner, apply special rules
         if (subEvent.getEntity() instanceof Tameable && GriefPrevention.instance.config_claims_protectCreatures)
@@ -917,25 +875,13 @@ public class EntityEventHandler implements Listener
             //if it's claimed
             if (claim != null)
             {
-                //if damaged by anything other than a player (exception villagers injured by zombies in admin claims), cancel the event
-                //why exception?  so admins can set up a village which can't be CHANGED by players, but must be "protected" by players.
-                //TODO: Discuss if this should only apply to admin claims...?
+                //if damaged by anything other than a player, cancel the event
                 if (attacker == null)
                 {
-                    //exception case
-                    if (event.getEntityType() == EntityType.VILLAGER && (damageSource instanceof Zombie || damageSource.getType() == EntityType.VINDICATOR || damageSource.getType() == EntityType.EVOKER || damageSource.getType() == EntityType.EVOKER_FANGS || damageSource.getType() == EntityType.VEX))
+                    event.setCancelled(true);
+                    if (damageSource instanceof Projectile)
                     {
-                        return;
-                    }
-
-                    //all other cases
-                    else
-                    {
-                        event.setCancelled(true);
-                        if (damageSource instanceof Projectile)
-                        {
-                            damageSource.remove();
-                        }
+                        damageSource.remove();
                     }
                 }
 
@@ -969,12 +915,7 @@ public class EntityEventHandler implements Listener
         }
     }
 
-    /**
-     * Helper method for checking if a damaged entity is configured to not be handled by GriefPrevention.
-     *
-     * @param event the EntityDamageEvent
-     * @return true if GriefPrevention is configured to not handle the damage event
-     */
+    // Helper method: check if a damaged entity is configured to not be handled by GriefPrevention.
     private boolean isIgnoredEntity(EntityDamageEvent event)
     {
         // Horse protections can be disabled in favor of other plugins' protections.
@@ -983,21 +924,15 @@ public class EntityEventHandler implements Listener
                 && (event.getEntity() instanceof Donkey || event.getEntity() instanceof Mule))
             return true;
         if (!GriefPrevention.instance.config_claims_protectLlamas && event.getEntity() instanceof Llama) return true;
-        // Most creature protections can be disabled. Tameables follow special rules because of their potential PvP participation.
+        // Most creature protections can be disabled. Villagers and tamed animals follow special rules.
         if (!GriefPrevention.instance.config_claims_protectCreatures &&
-                (event.getEntity() instanceof Merchant
-                        || event.getEntity() instanceof Creature && !(event.getEntity() instanceof Tameable)))
+                (event.getEntity() instanceof Creature && !(event.getEntity() instanceof Tameable || event.getEntity() instanceof Merchant)))
             return true;
 
         return false;
     }
 
-    /**
-     * Helper method for checking if a damaged entity is a dropped item protected by GriefPrevention.
-     *
-     * @param event the EntityDamageEvent
-     * @return true if GriefPrevention is protecting an item and the event has been handled
-     */
+    // Helper method: handle damage to dropped items protected by GriefPrevention.
     private boolean handleProtectedDrop(EntityDamageEvent event) {
         if (event.getEntityType() == EntityType.DROPPED_ITEM && event.getEntity().hasMetadata("GP_ITEMOWNER"))
         {
@@ -1007,12 +942,7 @@ public class EntityEventHandler implements Listener
         return false;
     }
 
-    /**
-     * Helper method for checking if a damaged entity is a tamed animal protected by GriefPrevention.
-     *
-     * @param event the EntityDamageEvent
-     * @return true if GriefPrevention is protecting a pet and the event has been handled
-     */
+    // Helper method: handle environmental damage to tamed animals protected by GriefPrevention.
     private boolean handlePetEnvironmentalDamage(EntityDamageEvent event)
     {
         if (!(event.getEntity() instanceof Tameable)
@@ -1040,12 +970,7 @@ public class EntityEventHandler implements Listener
         }
     }
 
-    /**
-     * Helper method for checking if an entity is a Player who should not be harmed by PvP damage.
-     *
-     * @param entity the Entity
-     * @return true if the Entity is a Player protected from PvP
-     */
+    // Helper method: check if an entity is a Player protected from PvP.
     private PvPProtectionState isPvPProtected(Entity entity)
     {
         // Ensure entity is a player.
@@ -1090,15 +1015,7 @@ public class EntityEventHandler implements Listener
         NONE, FRESH_SPAWN, CLAIM
     }
 
-    /**
-     * Helper method for handling an EntityDamageByEntityEvent if it is considered PvP.
-     *
-     * @param event the EntityDamageEvent to handle
-     * @param attacker the attacking player, if any
-     * @param sendErrors whether or not the attacker should be sent messages when damage is prevented
-     *
-     * @return true if the EntityDamageEvent is PvP damage
-     */
+    // Helper method: handle direct PvP.
     private boolean handlePvP(EntityDamageByEntityEvent event, Player attacker, boolean sendErrors)
     {
         if (attacker == null || !(event.getEntity() instanceof Player)) return false;
@@ -1108,7 +1025,7 @@ public class EntityEventHandler implements Listener
         // Protect freshly spawned players.
         if (defenderState == PvPProtectionState.FRESH_SPAWN)
         {
-            return cancelPvP(event, attacker, Messages.ThatPlayerPvPImmune, sendErrors);
+            return cancelDamage(event, attacker, Messages.ThatPlayerPvPImmune, sendErrors);
         }
 
         boolean attackerIgnoringClaims = this.dataStore.getPlayerData(attacker.getUniqueId()).ignoreClaims;
@@ -1116,7 +1033,7 @@ public class EntityEventHandler implements Listener
         // Unless attacker is ignoring claims, respect claim protections.
         if (!attackerIgnoringClaims && defenderState == PvPProtectionState.CLAIM)
         {
-            return cancelPvP(event, attacker, Messages.PlayerInPvPSafeZone, sendErrors);
+            return cancelDamage(event, attacker, Messages.PlayerInPvPSafeZone, sendErrors);
         }
 
         PvPProtectionState attackerState = isPvPProtected(attacker);
@@ -1125,16 +1042,20 @@ public class EntityEventHandler implements Listener
         if (!attackerIgnoringClaims && attackerState == PvPProtectionState.CLAIM
                 || attackerState == PvPProtectionState.FRESH_SPAWN)
         {
-            return cancelPvP(event, attacker, Messages.CantFightWhileImmune, sendErrors);
+            return cancelDamage(event, attacker, Messages.CantFightWhileImmune, sendErrors);
         }
 
         return true;
     }
 
-    /**
-     * Helper method for cancelling PvP damage and sending errors. Always returns true.
-     */
-    private boolean cancelPvP(EntityDamageEvent event, Player attacker, Messages error, boolean sendErrors)
+    // Helper method: cancel damage and send error.
+    private boolean cancelDamage(EntityDamageEvent event, Player attacker, Messages error, boolean sendErrors)
+    {
+        return cancelDamage(event, attacker, dataStore.getMessage(error), sendErrors);
+    }
+
+    // Helper method: cancel damage and send error.
+    private boolean cancelDamage(EntityDamageEvent event, Player attacker, String error, boolean sendErrors)
     {
         event.setCancelled(true);
         if (sendErrors)
@@ -1142,13 +1063,8 @@ public class EntityEventHandler implements Listener
         return true;
     }
 
-    /**
-     * Helper method for handling an EntityDamageByEntityEvent if it is an owned pet engaging in PvP combat.
-     *
-     * @param event the EntityDamageByEntityEvent
-     * @return true if the attack is a pet engaging in PvP
-     */
-    private boolean handlePetPvP(EntityDamageByEntityEvent event)
+    // Helper method: handle owned pets attacking players.
+    private boolean handlePetDamagerPvP(EntityDamageByEntityEvent event)
     {
         // Ensure damager is a pet.
         if (!(event.getDamager() instanceof Tameable)) return false;
@@ -1165,6 +1081,62 @@ public class EntityEventHandler implements Listener
 
         event.setCancelled(true);
         pet.setTarget(null);
+        return true;
+    }
+
+    // Helper method: handle damage of display/container/trading entities.
+    private boolean handleContainerEntity(EntityDamageByEntityEvent event, Player attacker, boolean sendErrors)
+    {
+        // Claimed entities used for display/container/trading purposes can only be hurt by a player with build trust.
+        if (event.getEntityType() != EntityType.ITEM_FRAME
+                && event.getEntityType() != EntityType.ARMOR_STAND
+                && event.getEntityType() != EntityType.ENDER_CRYSTAL
+                && !(event.getEntity() instanceof Merchant))
+            return false;
+
+        Entity damager = event.getDamager();
+
+        // Exception: Villagers are allowed to be damaged by raiders. // TODO several missed cases of raiders
+        // From BigScary: Why exception? Admins can set up a village which can't be CHANGED by players, but must be "protected" by players.
+        if (event.getEntity() instanceof Merchant
+                && (damager instanceof Zombie
+                || damager.getType() == EntityType.VINDICATOR
+                || damager.getType() == EntityType.EVOKER
+                || damager.getType() == EntityType.EVOKER_FANGS
+                || damager.getType() == EntityType.VEX))
+            return true;
+
+        Claim cachedClaim = null;
+        PlayerData playerData = null;
+
+        if (attacker != null)
+        {
+            playerData = this.dataStore.getPlayerData(attacker.getUniqueId());
+            cachedClaim = playerData.lastClaim;
+        }
+
+        Claim claim = this.dataStore.getClaimAt(event.getEntity().getLocation(), false, cachedClaim);
+
+        // If not claimed, fall through to next rule.
+        if (claim == null) return false;
+
+        // If attacker isn't a player, always cancel.
+        if (attacker == null)
+        {
+            event.setCancelled(true);
+            return true;
+        }
+
+        // Set attacker's last claim.
+        playerData.lastClaim = claim;
+
+        // Players must have build trust to damage structural entities.
+        String failureReason = claim.allowBuild(attacker, Material.AIR);
+        if (failureReason != null)
+        {
+            cancelDamage(event, attacker, failureReason, sendErrors);
+        }
+
         return true;
     }
 
