@@ -774,7 +774,7 @@ public class EntityEventHandler implements Listener
         if (handlePvP(subEvent, attacker, sendErrorMessagesToPlayers)) return;
 
         //don't track in worlds where claims are not enabled
-        if (!GriefPrevention.instance.claimsEnabledForWorld(event.getEntity().getWorld())) return;
+        if (!this.instance.claimsEnabledForWorld(event.getEntity().getWorld())) return;
 
         // Protect players from others' pets when protected from pvp.
         if (handlePetDamagerPvP(subEvent)) return;
@@ -793,13 +793,13 @@ public class EntityEventHandler implements Listener
     private boolean isIgnoredEntity(EntityDamageEvent event)
     {
         // Horse protections can be disabled in favor of other plugins' protections.
-        if (!GriefPrevention.instance.config_claims_protectHorses && event.getEntity() instanceof Horse) return true;
-        if (!GriefPrevention.instance.config_claims_protectDonkeys
+        if (!this.instance.config_claims_protectHorses && event.getEntity() instanceof Horse) return true;
+        if (!this.instance.config_claims_protectDonkeys
                 && (event.getEntity() instanceof Donkey || event.getEntity() instanceof Mule))
             return true;
-        if (!GriefPrevention.instance.config_claims_protectLlamas && event.getEntity() instanceof Llama) return true;
+        if (!this.instance.config_claims_protectLlamas && event.getEntity() instanceof Llama) return true;
         // Most creature protections can be disabled. Villagers and tamed animals follow special rules.
-        if (!GriefPrevention.instance.config_claims_protectCreatures &&
+        if (!this.instance.config_claims_protectCreatures &&
                 (event.getEntity() instanceof Creature && !(event.getEntity() instanceof Tameable || event.getEntity() instanceof Merchant)))
             return true;
 
@@ -820,8 +820,7 @@ public class EntityEventHandler implements Listener
     // Helper method: handle environmental damage to tamed animals protected by GriefPrevention.
     private boolean handlePetEnvironmentalDamage(EntityDamageEvent event)
     {
-        if (!(event.getEntity() instanceof Tameable)
-                || GriefPrevention.instance.pvpRulesApply(event.getEntity().getWorld()))
+        if (!(event.getEntity() instanceof Tameable) || this.instance.pvpRulesApply(event.getEntity().getWorld()))
             return false;
 
         Tameable tameable = (Tameable) event.getEntity();
@@ -852,19 +851,19 @@ public class EntityEventHandler implements Listener
         if (!(entity instanceof Player)) return PvPProtectionState.NONE;
 
         // Ensure PvP rules are enabled in world.
-        if (!GriefPrevention.instance.pvpRulesApply(entity.getWorld())) return PvPProtectionState.NONE;
+        if (!this.instance.pvpRulesApply(entity.getWorld())) return PvPProtectionState.NONE;
 
         Player player = (Player) entity;
-        PlayerData playerData = GriefPrevention.instance.dataStore.getPlayerData(player.getUniqueId());
+        PlayerData playerData = this.dataStore.getPlayerData(player.getUniqueId());
 
         // Recently spawned players are protected.
-        if (GriefPrevention.instance.config_pvp_protectFreshSpawns && playerData.pvpImmune)
+        if (this.instance.config_pvp_protectFreshSpawns && playerData.pvpImmune)
             return PvPProtectionState.FRESH_SPAWN;
 
         // If claims are not enabled, don't attempt to check for claim protection.
-        if (!GriefPrevention.instance.claimsEnabledForWorld(player.getWorld())) return PvPProtectionState.NONE;
+        if (!this.instance.claimsEnabledForWorld(player.getWorld())) return PvPProtectionState.NONE;
 
-        Claim claim = GriefPrevention.instance.dataStore.getClaimAt(player.getLocation(), false, playerData.lastClaim);
+        Claim claim = this.dataStore.getClaimAt(player.getLocation(), false, playerData.lastClaim);
 
         // If player is not in a claim, the area is not a PvP safe zone.
         if (claim == null) return PvPProtectionState.NONE;
@@ -872,7 +871,7 @@ public class EntityEventHandler implements Listener
         playerData.lastClaim = claim;
 
         // If the claim is not a PvP safe zone, the player is not protected.
-        if (!GriefPrevention.instance.claimIsPvPSafeZone(claim)) return PvPProtectionState.NONE;
+        if (!this.instance.claimIsPvPSafeZone(claim)) return PvPProtectionState.NONE;
 
         // Call PreventPvPEvent to allow addons to modify PvP.
         PreventPvPEvent pvpEvent = new PreventPvPEvent(claim);
@@ -926,7 +925,7 @@ public class EntityEventHandler implements Listener
     // Helper method: cancel damage and send error.
     private boolean cancelDamage(EntityDamageEvent event, Player attacker, Messages error, boolean sendErrors)
     {
-        return cancelDamage(event, attacker, dataStore.getMessage(error), sendErrors);
+        return cancelDamage(event, attacker, this.dataStore.getMessage(error), sendErrors);
     }
 
     // Helper method: cancel damage and send error.
@@ -1039,12 +1038,12 @@ public class EntityEventHandler implements Listener
         if (attackerData.pvpImmune) return cancelDamage(event, attacker, Messages.CantFightWhileImmune, sendErrors);
 
         // Disallow in non-pvp worlds. In PvP worlds
-        if (!GriefPrevention.instance.pvpRulesApply(tameable.getLocation().getWorld()) || (GriefPrevention.instance.config_pvp_protectPets && tameable.getType() != EntityType.WOLF))
+        if (!this.instance.pvpRulesApply(tameable.getLocation().getWorld()) || (this.instance.config_pvp_protectPets && tameable.getType() != EntityType.WOLF))
         {
             String ownerName = GriefPrevention.lookupPlayerName(ownerID);
-            String message = GriefPrevention.instance.dataStore.getMessage(Messages.NoDamageClaimedEntity, ownerName);
+            String message = this.dataStore.getMessage(Messages.NoDamageClaimedEntity, ownerName);
             if (attacker.hasPermission("griefprevention.ignoreclaims"))
-                message += "  " + GriefPrevention.instance.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
+                message += "  " + this.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
             if (sendErrors)
                 GriefPrevention.sendMessage(attacker, TextMode.Err, message);
             PreventPvPEvent pvpEvent = new PreventPvPEvent(new Claim(tameable.getLocation(), tameable.getLocation(), null, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), null));
@@ -1064,9 +1063,9 @@ public class EntityEventHandler implements Listener
 
         // Otherwise, deny the damage.
         String ownerName = tameable.getOwner().getName();
-        String message = GriefPrevention.instance.dataStore.getMessage(Messages.NoDamageClaimedEntity, ownerName);
+        String message = this.dataStore.getMessage(Messages.NoDamageClaimedEntity, ownerName);
         if (attacker.hasPermission("griefprevention.ignoreclaims"))
-            message += "  " + GriefPrevention.instance.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
+            message += "  " + this.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
         return cancelDamage(event, attacker, message, sendErrors);
     }
 
@@ -1151,9 +1150,9 @@ public class EntityEventHandler implements Listener
             }
         }
 
-        String message = GriefPrevention.instance.dataStore.getMessage(Messages.NoDamageClaimedEntity, claim.getOwnerName());
+        String message = this.dataStore.getMessage(Messages.NoDamageClaimedEntity, claim.getOwnerName());
         if (attacker.hasPermission("griefprevention.ignoreclaims"))
-            message += "  " + GriefPrevention.instance.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
+            message += "  " + this.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
 
         return cancelDamage(event, attacker, message, sendErrors);
     }
