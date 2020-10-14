@@ -782,66 +782,8 @@ public class EntityEventHandler implements Listener
         // Claimed entities used for display/container/trading purposes can only be hurt by a player with build trust.
         if (handleContainerEntity(subEvent, attacker, sendErrorMessagesToPlayers)) return;
 
-        //if entity is tameable and has an owner, apply special rules
-        if (subEvent.getEntity() instanceof Tameable && GriefPrevention.instance.config_claims_protectCreatures)
-        {
-            Tameable tameable = (Tameable) subEvent.getEntity();
-            if (tameable.isTamed() && tameable.getOwner() != null)
-            {
-                //limit attacks by players to owners and admins in ignore claims mode
-                if (attacker != null)
-                {
-                    UUID ownerID = tameable.getOwner().getUniqueId();
-
-                    //if the player interacting is the owner, always allow
-                    if (attacker.getUniqueId().equals(ownerID)) return;
-
-                    //allow for admin override
-                    PlayerData attackerData = this.dataStore.getPlayerData(attacker.getUniqueId());
-                    if (attackerData.ignoreClaims) return;
-
-                    //otherwise disallow in non-pvp worlds (and also pvp worlds if configured to do so)
-                    if (!GriefPrevention.instance.pvpRulesApply(subEvent.getEntity().getLocation().getWorld()) || (GriefPrevention.instance.config_pvp_protectPets && subEvent.getEntityType() != EntityType.WOLF))
-                    {
-                        String ownerName = GriefPrevention.lookupPlayerName(ownerID);
-                        String message = GriefPrevention.instance.dataStore.getMessage(Messages.NoDamageClaimedEntity, ownerName);
-                        if (attacker.hasPermission("griefprevention.ignoreclaims"))
-                            message += "  " + GriefPrevention.instance.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
-                        if (sendErrorMessagesToPlayers)
-                            GriefPrevention.sendMessage(attacker, TextMode.Err, message);
-                        PreventPvPEvent pvpEvent = new PreventPvPEvent(new Claim(subEvent.getEntity().getLocation(), subEvent.getEntity().getLocation(), null, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), null));
-                        Bukkit.getPluginManager().callEvent(pvpEvent);
-                        if (!pvpEvent.isCancelled())
-                        {
-                            event.setCancelled(true);
-                        }
-                        return;
-                    }
-                    //and disallow if attacker is pvp immune
-                    else if (attackerData.pvpImmune)
-                    {
-                        event.setCancelled(true);
-                        if (sendErrorMessagesToPlayers)
-                            GriefPrevention.sendMessage(attacker, TextMode.Err, Messages.CantFightWhileImmune);
-                        return;
-                    }
-                    // disallow players attacking tamed wolves (dogs) unless under attack by said wolf
-                    else if (tameable.getType() == EntityType.WOLF && !tameable.getOwner().equals(attacker))
-                    {
-                        if (tameable.getTarget() != null && tameable.getTarget().equals(attacker)) return;
-
-                        event.setCancelled(true);
-                        String ownerName = tameable.getOwner().getName();
-                        String message = GriefPrevention.instance.dataStore.getMessage(Messages.NoDamageClaimedEntity, ownerName);
-                        if (attacker.hasPermission("griefprevention.ignoreclaims"))
-                            message += "  " + GriefPrevention.instance.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
-                        if (sendErrorMessagesToPlayers)
-                            GriefPrevention.sendMessage(attacker, TextMode.Err, message);
-                        return;
-                    }
-                }
-            }
-        }
+        // Prevent players from attacking pets where necessary.
+        if (handlePetDamagedPvP(subEvent, attacker, sendErrorMessagesToPlayers)) return;
 
         //if the entity is an non-monster creature (monsters skipped above + creatures if configured to)
         if (subEvent.getEntity() instanceof Creature)
@@ -1138,6 +1080,61 @@ public class EntityEventHandler implements Listener
         }
 
         return true;
+    }
+
+    // Helper method: handle tamed animals damaged by players.
+    private boolean handlePetDamagedPvP(EntityDamageByEntityEvent event, Player attacker, boolean sendErrors)
+    {
+        // Attacker must be a player and defender must be a pet.
+        if (attacker == null || !(event.getEntity() instanceof Tameable)) return false;
+
+        Tameable tameable = (Tameable) event.getEntity();
+
+        // Pet must have an owner set.
+        if (!tameable.isTamed() || tameable.getOwner() == null) return false;
+
+        UUID ownerID = tameable.getOwner().getUniqueId();
+
+        // Always allow owners to damage their own pets.
+        if (attacker.getUniqueId().equals(ownerID)) return true;
+
+        // Allow admins ignoring claims to bypass protections.
+        PlayerData attackerData = this.dataStore.getPlayerData(attacker.getUniqueId());
+        if (attackerData.ignoreClaims) return true;
+
+        // Disallow if attacker is pvp immune.
+        if (attackerData.pvpImmune) return cancelDamage(event, attacker, Messages.CantFightWhileImmune, sendErrors);
+
+        // Disallow in non-pvp worlds. In PvP worlds
+        if (!GriefPrevention.instance.pvpRulesApply(tameable.getLocation().getWorld()) || (GriefPrevention.instance.config_pvp_protectPets && tameable.getType() != EntityType.WOLF))
+        {
+            String ownerName = GriefPrevention.lookupPlayerName(ownerID);
+            String message = GriefPrevention.instance.dataStore.getMessage(Messages.NoDamageClaimedEntity, ownerName);
+            if (attacker.hasPermission("griefprevention.ignoreclaims"))
+                message += "  " + GriefPrevention.instance.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
+            if (sendErrors)
+                GriefPrevention.sendMessage(attacker, TextMode.Err, message);
+            PreventPvPEvent pvpEvent = new PreventPvPEvent(new Claim(tameable.getLocation(), tameable.getLocation(), null, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), null));
+            Bukkit.getPluginManager().callEvent(pvpEvent);
+            if (!pvpEvent.isCancelled())
+            {
+                event.setCancelled(true);
+            }
+            return true;
+        }
+
+        // If tameable is not a wolf, fall through to creature handling.
+        if (tameable.getType() != EntityType.WOLF) return false;
+
+        // If player is under attack by the wolf, allow them to retaliate.
+        if (tameable.getTarget() != null && tameable.getTarget().equals(attacker)) return true;
+
+        // Otherwise, deny the damage.
+        String ownerName = tameable.getOwner().getName();
+        String message = GriefPrevention.instance.dataStore.getMessage(Messages.NoDamageClaimedEntity, ownerName);
+        if (attacker.hasPermission("griefprevention.ignoreclaims"))
+            message += "  " + GriefPrevention.instance.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
+        return cancelDamage(event, attacker, message, sendErrors);
     }
 
     //when an entity is damaged
