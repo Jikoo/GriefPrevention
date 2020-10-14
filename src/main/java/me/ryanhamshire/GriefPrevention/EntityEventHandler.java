@@ -785,76 +785,8 @@ public class EntityEventHandler implements Listener
         // Prevent players from attacking pets where necessary.
         if (handlePetDamagedPvP(subEvent, attacker, sendErrorMessagesToPlayers)) return;
 
-        //if the entity is an non-monster creature (monsters skipped above + creatures if configured to)
-        if (subEvent.getEntity() instanceof Creature)
-        {
-            Claim cachedClaim = null;
-            PlayerData playerData = null;
-
-            //if not a player or an explosive, allow
-            //RoboMWM: Or a lingering potion, or a witch
-            if (attacker == null
-                    && damageSource.getType() != EntityType.CREEPER
-                    && damageSource.getType() != EntityType.WITHER
-                    && damageSource.getType() != EntityType.ENDER_CRYSTAL
-                    && damageSource.getType() != EntityType.AREA_EFFECT_CLOUD
-                    && damageSource.getType() != EntityType.WITCH
-                    && !(damageSource instanceof Projectile)
-                    && !(damageSource instanceof Explosive)
-                    && !(damageSource instanceof ExplosiveMinecart))
-            {
-                return;
-            }
-
-            if (attacker != null)
-            {
-                playerData = this.dataStore.getPlayerData(attacker.getUniqueId());
-                cachedClaim = playerData.lastClaim;
-            }
-
-            Claim claim = this.dataStore.getClaimAt(event.getEntity().getLocation(), false, cachedClaim);
-
-            //if it's claimed
-            if (claim != null)
-            {
-                //if damaged by anything other than a player, cancel the event
-                if (attacker == null)
-                {
-                    event.setCancelled(true);
-                    if (damageSource instanceof Projectile)
-                    {
-                        damageSource.remove();
-                    }
-                }
-
-                //otherwise the player damaging the entity must have permission, unless it's a dog in a pvp world
-                else if (!(event.getEntity().getWorld().getPVP() && event.getEntity().getType() == EntityType.WOLF))
-                {
-                    String noContainersReason = claim.allowContainers(attacker);
-                    if (noContainersReason != null)
-                    {
-                        event.setCancelled(true);
-
-                        //kill the arrow to avoid infinite bounce between crowded together animals //RoboMWM: except for tridents
-                        if (projectile != null && projectile.getType() != EntityType.TRIDENT) projectile.remove();
-                        if (damageSource.getType() == EntityType.FIREWORK && event.getEntity().getType() != EntityType.PLAYER)
-                            return;
-
-                        if (sendErrorMessagesToPlayers)
-                        {
-                            String message = GriefPrevention.instance.dataStore.getMessage(Messages.NoDamageClaimedEntity, claim.getOwnerName());
-                            if (attacker.hasPermission("griefprevention.ignoreclaims"))
-                                message += "  " + GriefPrevention.instance.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
-                            GriefPrevention.sendMessage(attacker, TextMode.Err, message);
-                        }
-                        event.setCancelled(true);
-                    }
-
-                    //cache claim for later
-                    playerData.lastClaim = claim;
-                }
-            }
-        }
+        // Handle remaining cases of damage to creatures.
+        if (handleCreatureDamage(subEvent, attacker, projectile, sendErrorMessagesToPlayers)) return;
     }
 
     // Helper method: check if a damaged entity is configured to not be handled by GriefPrevention.
@@ -875,7 +807,8 @@ public class EntityEventHandler implements Listener
     }
 
     // Helper method: handle damage to dropped items protected by GriefPrevention.
-    private boolean handleProtectedDrop(EntityDamageEvent event) {
+    private boolean handleProtectedDrop(EntityDamageEvent event)
+    {
         if (event.getEntityType() == EntityType.DROPPED_ITEM && event.getEntity().hasMetadata("GP_ITEMOWNER"))
         {
             event.setCancelled(true);
@@ -1134,6 +1067,94 @@ public class EntityEventHandler implements Listener
         String message = GriefPrevention.instance.dataStore.getMessage(Messages.NoDamageClaimedEntity, ownerName);
         if (attacker.hasPermission("griefprevention.ignoreclaims"))
             message += "  " + GriefPrevention.instance.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
+        return cancelDamage(event, attacker, message, sendErrors);
+    }
+
+    // Helper method: handle all generic creature damage.
+    private boolean handleCreatureDamage(EntityDamageByEntityEvent event, Player attacker, Projectile projectile, boolean sendErrors)
+    {
+        if (!(event.getEntity() instanceof Creature)) return false;
+
+        Entity damageSource = event.getDamager();
+
+        // If attacker is not available and damage is not likely sourced from a malicious player, allow.
+        if (attacker == null
+                && damageSource.getType() != EntityType.CREEPER
+                && damageSource.getType() != EntityType.WITHER
+                && damageSource.getType() != EntityType.ENDER_CRYSTAL
+                && damageSource.getType() != EntityType.AREA_EFFECT_CLOUD
+                && damageSource.getType() != EntityType.WITCH
+                && !(damageSource instanceof Projectile)
+                && !(damageSource instanceof Explosive)
+                && !(damageSource instanceof ExplosiveMinecart))
+        {
+            return false;
+        }
+
+        Claim cachedClaim = null;
+        PlayerData playerData = null;
+
+        if (attacker != null)
+        {
+            playerData = this.dataStore.getPlayerData(attacker.getUniqueId());
+            cachedClaim = playerData.lastClaim;
+        }
+
+        Claim claim = this.dataStore.getClaimAt(event.getEntity().getLocation(), false, cachedClaim);
+
+        // If unclaimed, allow damage.
+        if (claim == null) return false;
+
+        // If damaged by anything other than a player, cancel the event.
+        if (attacker == null)
+        {
+            event.setCancelled(true);
+            if (projectile != null)
+            {
+                projectile.remove();
+            }
+
+            return true;
+        }
+
+        // Cache claim for later use.
+        playerData.lastClaim = claim;
+
+        // Otherwise the attacker must have permission in the claim.
+        String noContainersReason = claim.allowContainers(attacker);
+
+        if (noContainersReason == null) {
+            return true;
+        }
+
+        // Handle projectiles used for attacks to prevent infinite bounces.
+        if (projectile != null)
+        {
+            // Fireworks should not warn shooter so as to not spam - multiple entities may be affected.
+            if (projectile.getType() == EntityType.FIREWORK)
+            {
+                event.setCancelled(true);
+                return true;
+            }
+            // Tridents can be retrieved and are hard to obtain. Remove velocity and teleport beneath.
+            if (projectile.getType() == EntityType.TRIDENT)
+            {
+                // TODO test this crap
+                projectile.setVelocity(new Vector(0, 0, 0));
+                projectile.teleport(event.getEntity().getLocation());
+                projectile.setBounce(false);
+            }
+            // Remove all other projectiles to prevent infinite bounces and warnings.
+            else
+            {
+                projectile.remove();
+            }
+        }
+
+        String message = GriefPrevention.instance.dataStore.getMessage(Messages.NoDamageClaimedEntity, claim.getOwnerName());
+        if (attacker.hasPermission("griefprevention.ignoreclaims"))
+            message += "  " + GriefPrevention.instance.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
+
         return cancelDamage(event, attacker, message, sendErrors);
     }
 
