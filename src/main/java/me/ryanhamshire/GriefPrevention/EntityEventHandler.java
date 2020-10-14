@@ -52,6 +52,7 @@ import org.bukkit.entity.ThrownPotion;
 import org.bukkit.entity.Vehicle;
 import org.bukkit.entity.Zombie;
 import org.bukkit.entity.minecart.ExplosiveMinecart;
+import org.bukkit.event.Cancellable;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -789,7 +790,7 @@ public class EntityEventHandler implements Listener
         if (!(subEvent.getEntity() instanceof Creature)) return;
 
        // Handle remaining cases of damage to creatures.
-        handleGenericDamage(event, subEvent.getDamager(), attacker, projectile, sendErrorMessagesToPlayers);
+        handleGenericDamage(event, event.getEntity(), damageSource, attacker, projectile, sendErrorMessagesToPlayers);
     }
 
     // Helper method: check if a damaged entity is configured to not be handled by GriefPrevention.
@@ -902,7 +903,7 @@ public class EntityEventHandler implements Listener
         // Protect freshly spawned players.
         if (defenderState == PvPProtectionState.FRESH_SPAWN)
         {
-            return cancelDamage(event, attacker, Messages.ThatPlayerPvPImmune, sendErrors);
+            return cancelEvent(event, attacker, Messages.ThatPlayerPvPImmune, sendErrors);
         }
 
         boolean attackerIgnoringClaims = this.dataStore.getPlayerData(attacker.getUniqueId()).ignoreClaims;
@@ -910,7 +911,7 @@ public class EntityEventHandler implements Listener
         // Unless attacker is ignoring claims, respect claim protections.
         if (!attackerIgnoringClaims && defenderState == PvPProtectionState.CLAIM)
         {
-            return cancelDamage(event, attacker, Messages.PlayerInPvPSafeZone, sendErrors);
+            return cancelEvent(event, attacker, Messages.PlayerInPvPSafeZone, sendErrors);
         }
 
         PvPProtectionState attackerState = isPvPProtected(attacker);
@@ -919,20 +920,20 @@ public class EntityEventHandler implements Listener
         if (!attackerIgnoringClaims && attackerState == PvPProtectionState.CLAIM
                 || attackerState == PvPProtectionState.FRESH_SPAWN)
         {
-            return cancelDamage(event, attacker, Messages.CantFightWhileImmune, sendErrors);
+            return cancelEvent(event, attacker, Messages.CantFightWhileImmune, sendErrors);
         }
 
         return true;
     }
 
-    // Helper method: cancel damage and send error.
-    private boolean cancelDamage(EntityDamageEvent event, Player attacker, Messages error, boolean sendErrors)
+    // Helper method: cancel event and send error.
+    private boolean cancelEvent(Cancellable event, Player attacker, Messages error, boolean sendErrors)
     {
-        return cancelDamage(event, attacker, this.dataStore.getMessage(error), sendErrors);
+        return cancelEvent(event, attacker, this.dataStore.getMessage(error), sendErrors);
     }
 
-    // Helper method: cancel damage and send error.
-    private boolean cancelDamage(EntityDamageEvent event, Player attacker, String error, boolean sendErrors)
+    // Helper method: cancel event and send error.
+    private boolean cancelEvent(Cancellable event, Player attacker, String error, boolean sendErrors)
     {
         event.setCancelled(true);
         if (sendErrors)
@@ -1011,7 +1012,7 @@ public class EntityEventHandler implements Listener
         String failureReason = claim.allowBuild(attacker, Material.AIR);
         if (failureReason != null)
         {
-            cancelDamage(event, attacker, failureReason, sendErrors);
+            cancelEvent(event, attacker, failureReason, sendErrors);
         }
 
         return true;
@@ -1038,7 +1039,7 @@ public class EntityEventHandler implements Listener
         if (attackerData.ignoreClaims) return true;
 
         // Disallow if attacker is pvp immune.
-        if (attackerData.pvpImmune) return cancelDamage(event, attacker, Messages.CantFightWhileImmune, sendErrors);
+        if (attackerData.pvpImmune) return cancelEvent(event, attacker, Messages.CantFightWhileImmune, sendErrors);
 
         // Disallow in non-pvp worlds. In PvP worlds
         if (!this.instance.pvpRulesApply(tameable.getLocation().getWorld()) || (this.instance.config_pvp_protectPets && tameable.getType() != EntityType.WOLF))
@@ -1069,11 +1070,12 @@ public class EntityEventHandler implements Listener
         String message = this.dataStore.getMessage(Messages.NoDamageClaimedEntity, ownerName);
         if (attacker.hasPermission("griefprevention.ignoreclaims"))
             message += "  " + this.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
-        return cancelDamage(event, attacker, message, sendErrors);
+        return cancelEvent(event, attacker, message, sendErrors);
     }
 
     // Helper method: handle all generic creature damage.
-    private void handleGenericDamage(EntityDamageEvent event, Entity damageSource, Player attacker, Projectile projectile, boolean sendErrors)
+    private void handleGenericDamage(Cancellable event, Entity damaged, Entity damageSource, Player attacker,
+                                     Projectile projectile, boolean sendErrors)
     {
         // If attacker is not a player and damage is not likely sourced indirectly from a player, allow.
         if (attacker == null && damageSource != null
@@ -1098,7 +1100,7 @@ public class EntityEventHandler implements Listener
             cachedClaim = playerData.lastClaim;
         }
 
-        Claim claim = this.dataStore.getClaimAt(event.getEntity().getLocation(), false, cachedClaim);
+        Claim claim = this.dataStore.getClaimAt(damaged.getLocation(), false, cachedClaim);
 
         // If unclaimed, allow damage.
         if (claim == null) return;
@@ -1138,7 +1140,7 @@ public class EntityEventHandler implements Listener
             if (projectile.getType() == EntityType.TRIDENT)
             {
                 projectile.setVelocity(new Vector(0, 0, 0));
-                projectile.teleport(event.getEntity().getLocation());
+                projectile.teleport(damaged.getLocation());
                 projectile.setBounce(false);
             }
             // Remove all other projectiles to prevent infinite bounces and warnings.
@@ -1152,7 +1154,7 @@ public class EntityEventHandler implements Listener
         if (attacker.hasPermission("griefprevention.ignoreclaims"))
             message += "  " + this.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
 
-        cancelDamage(event, attacker, message, sendErrors);
+        cancelEvent(event, attacker, message, sendErrors);
     }
 
     //when an entity is damaged
@@ -1231,9 +1233,7 @@ public class EntityEventHandler implements Listener
         }
 
         // Treat vehicle damage as generic entity damage.
-        EntityDamageEvent damageEvent = new EntityDamageEvent(event.getVehicle(), DamageCause.CUSTOM, event.getDamage());
-        handleGenericDamage(damageEvent, damageSource, attacker, projectile, attacker != null);
-        if (damageEvent.isCancelled()) event.setCancelled(true);
+        handleGenericDamage(event, event.getVehicle(), damageSource, attacker, projectile, attacker != null);
     }
 
     //when a splash potion effects one or more entities...
