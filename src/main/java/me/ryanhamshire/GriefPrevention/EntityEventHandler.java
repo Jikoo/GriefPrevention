@@ -785,8 +785,11 @@ public class EntityEventHandler implements Listener
         // Prevent players from attacking pets where necessary.
         if (handlePetDamagedPvP(subEvent, attacker, sendErrorMessagesToPlayers)) return;
 
-        // Handle remaining cases of damage to creatures.
-        if (handleCreatureDamage(subEvent, attacker, projectile, sendErrorMessagesToPlayers)) return;
+        // Only creatures are protected by generic damage handling.
+        if (!(subEvent.getEntity() instanceof Creature)) return;
+
+       // Handle remaining cases of damage to creatures.
+        handleGenericDamage(event, subEvent.getDamager(), attacker, projectile, sendErrorMessagesToPlayers);
     }
 
     // Helper method: check if a damaged entity is configured to not be handled by GriefPrevention.
@@ -1070,14 +1073,10 @@ public class EntityEventHandler implements Listener
     }
 
     // Helper method: handle all generic creature damage.
-    private boolean handleCreatureDamage(EntityDamageByEntityEvent event, Player attacker, Projectile projectile, boolean sendErrors)
+    private void handleGenericDamage(EntityDamageEvent event, Entity damageSource, Player attacker, Projectile projectile, boolean sendErrors)
     {
-        if (!(event.getEntity() instanceof Creature)) return false;
-
-        Entity damageSource = event.getDamager();
-
         // If attacker is not a player and damage is not likely sourced indirectly from a player, allow.
-        if (attacker == null
+        if (attacker == null && damageSource != null
                 && damageSource.getType() != EntityType.CREEPER
                 && damageSource.getType() != EntityType.WITHER
                 && damageSource.getType() != EntityType.ENDER_CRYSTAL
@@ -1087,7 +1086,7 @@ public class EntityEventHandler implements Listener
                 && !(damageSource instanceof Explosive)
                 && !(damageSource instanceof ExplosiveMinecart))
         {
-            return false;
+            return;
         }
 
         Claim cachedClaim = null;
@@ -1102,7 +1101,7 @@ public class EntityEventHandler implements Listener
         Claim claim = this.dataStore.getClaimAt(event.getEntity().getLocation(), false, cachedClaim);
 
         // If unclaimed, allow damage.
-        if (claim == null) return false;
+        if (claim == null) return;
 
         // If damaged by anything other than a player, cancel the event.
         if (attacker == null)
@@ -1113,7 +1112,7 @@ public class EntityEventHandler implements Listener
                 projectile.remove();
             }
 
-            return true;
+            return;
         }
 
         // Cache claim for later use.
@@ -1123,7 +1122,7 @@ public class EntityEventHandler implements Listener
         String noContainersReason = claim.allowContainers(attacker);
 
         if (noContainersReason == null) {
-            return true;
+            return;
         }
 
         // Handle projectiles used for attacks to prevent infinite bounces.
@@ -1133,7 +1132,7 @@ public class EntityEventHandler implements Listener
             if (projectile.getType() == EntityType.FIREWORK)
             {
                 event.setCancelled(true);
-                return true;
+                return;
             }
             // Tridents can be retrieved and are hard to obtain. Remove velocity and teleport beneath.
             if (projectile.getType() == EntityType.TRIDENT)
@@ -1153,7 +1152,7 @@ public class EntityEventHandler implements Listener
         if (attacker.hasPermission("griefprevention.ignoreclaims"))
             message += "  " + this.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
 
-        return cancelDamage(event, attacker, message, sendErrors);
+        cancelDamage(event, attacker, message, sendErrors);
     }
 
     //when an entity is damaged
@@ -1210,85 +1209,31 @@ public class EntityEventHandler implements Listener
         //all of this is anti theft code
         if (!GriefPrevention.instance.config_claims_preventTheft) return;
 
-        //input validation
-        if (event.getVehicle() == null) return;
-
         //don't track in worlds where claims are not enabled
         if (!GriefPrevention.instance.claimsEnabledForWorld(event.getVehicle().getWorld())) return;
 
         //determine which player is attacking, if any
         Player attacker = null;
+        Projectile projectile = null;
         Entity damageSource = event.getAttacker();
-        EntityType damageSourceType = null;
 
-        //if damage source is null or a creeper, don't allow the damage when the vehicle is in a land claim
-        if (damageSource != null)
+        if (damageSource instanceof Player)
         {
-            damageSourceType = damageSource.getType();
-
-            if (damageSource.getType() == EntityType.PLAYER)
+            attacker = (Player) damageSource;
+        }
+        else if (damageSource instanceof Projectile)
+        {
+            projectile = (Projectile) damageSource;
+            if (projectile.getShooter() instanceof Player)
             {
-                attacker = (Player) damageSource;
-            }
-            else if (damageSource instanceof Projectile)
-            {
-                Projectile arrow = (Projectile) damageSource;
-                if (arrow.getShooter() instanceof Player)
-                {
-                    attacker = (Player) arrow.getShooter();
-                }
+                attacker = (Player) projectile.getShooter();
             }
         }
 
-        //if not a player and not an explosion, always allow
-        if (attacker == null && damageSourceType != EntityType.CREEPER && damageSourceType != EntityType.WITHER && damageSourceType != EntityType.PRIMED_TNT)
-        {
-            return;
-        }
-
-        //NOTE: vehicles can be pushed around.
-        //so unless precautions are taken by the owner, a resourceful thief might find ways to steal anyway
-        Claim cachedClaim = null;
-        PlayerData playerData = null;
-
-        if (attacker != null)
-        {
-            playerData = this.dataStore.getPlayerData(attacker.getUniqueId());
-            cachedClaim = playerData.lastClaim;
-        }
-
-        Claim claim = this.dataStore.getClaimAt(event.getVehicle().getLocation(), false, cachedClaim);
-
-        //if it's claimed
-        if (claim != null)
-        {
-            //if damaged by anything other than a player, cancel the event
-            if (attacker == null)
-            {
-                event.setCancelled(true);
-            }
-
-            //otherwise the player damaging the entity must have permission
-            else
-            {
-                String noContainersReason = claim.allowContainers(attacker);
-                if (noContainersReason != null)
-                {
-                    event.setCancelled(true);
-                    String message = GriefPrevention.instance.dataStore.getMessage(Messages.NoDamageClaimedEntity, claim.getOwnerName());
-                    if (attacker.hasPermission("griefprevention.ignoreclaims"))
-                        message += "  " + GriefPrevention.instance.dataStore.getMessage(Messages.IgnoreClaimsAdvertisement);
-                    GriefPrevention.sendMessage(attacker, TextMode.Err, message);
-                    event.setCancelled(true);
-                }
-
-                //cache claim for later
-                if (playerData != null)
-                {
-                    playerData.lastClaim = claim;
-                }
-            }
-        }
+        // Treat vehicle damage as generic entity damage.
+        EntityDamageEvent damageEvent = new EntityDamageEvent(event.getVehicle(), DamageCause.CUSTOM, event.getDamage());
+        handleGenericDamage(damageEvent, damageSource, attacker, projectile, attacker != null);
+        if (damageEvent.isCancelled()) event.setCancelled(true);
     }
 
     //when a splash potion effects one or more entities...
