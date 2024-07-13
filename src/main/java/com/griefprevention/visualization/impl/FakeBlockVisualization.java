@@ -130,10 +130,11 @@ public class FakeBlockVisualization extends BlockBoundaryVisualization
                 || Tag.FENCE_GATES.isTagged(blockMaterial)
                 || Tag.SIGNS.isTagged(blockMaterial)
                 || Tag.WALLS.isTagged(blockMaterial)
-                || Tag.WALL_SIGNS.isTagged(blockMaterial))
+                || Tag.WALL_SIGNS.isTagged(blockMaterial)
+                || Tag.REPLACEABLE.isTagged(blockMaterial))
             return true;
 
-        return block.getType().isTransparent();
+        return block.getCollisionShape().getBoundingBoxes().stream().anyMatch(box -> box.getVolume() == 1);
     }
 
 }
