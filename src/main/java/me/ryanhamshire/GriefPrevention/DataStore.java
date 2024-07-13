@@ -751,7 +751,7 @@ public abstract class DataStore
                 for (Claim subClaim : claim.children)
                 {
                     if (subClaim.getID() == id)
-                    return subClaim;
+                        return subClaim;
                 }
             }
         }
@@ -1703,20 +1703,22 @@ public abstract class DataStore
     }
 
     //gets all the claims "near" a location
-    Set<Claim> getNearbyClaims(Location location)
+    Set<Claim> getNearbyClaims(@NotNull Location location)
     {
+        World world = location.getWorld();
+        if (world == null) return Set.of();
         return getChunkClaims(
-                location.getWorld(),
+                world,
                 new BoundingBox(location.subtract(150, 0, 150), location.clone().add(300, 0, 300)));
     }
 
     //deletes all the land claims in a specified world
-    void deleteClaimsInWorld(World world, boolean deleteAdminClaims)
+    void deleteClaimsInWorld(@NotNull World world, boolean deleteAdminClaims)
     {
         for (int i = 0; i < claims.size(); i++)
         {
             Claim claim = claims.get(i);
-            if (claim.getLesserBoundaryCorner().getWorld().equals(world))
+            if (world.equals(claim.getLesserBoundaryCorner().getWorld()))
             {
                 if (!deleteAdminClaims && claim.isAdminClaim()) continue;
                 this.deleteClaim(claim, false, false);
