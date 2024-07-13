@@ -559,10 +559,7 @@ class PlayerEventHandler implements Listener
     static void makeSocialLogEntry(String name, String message)
     {
         StringBuilder entryBuilder = new StringBuilder(name);
-        for (int i = name.length(); i < longestNameLength; i++)
-        {
-            entryBuilder.append(' ');
-        }
+        entryBuilder.append(" ".repeat(Math.max(0, longestNameLength - name.length())));
         entryBuilder.append(": ").append(message);
 
         longestNameLength = Math.max(longestNameLength, name.length());
@@ -2414,16 +2411,11 @@ class PlayerEventHandler implements Listener
     private boolean onLeftClickWatchList(Material material)
     {
         if (Tag.BUTTONS.isTagged(material)) return true;
-        switch (material)
+        return switch (material)
         {
-            case LEVER:
-            case REPEATER:
-            case CAKE:
-            case DRAGON_EGG:
-                return true;
-            default:
-                return false;
-        }
+            case LEVER, REPEATER, CAKE, DRAGON_EGG -> true;
+            default -> false;
+        };
     }
 
     static Block getTargetBlock(Player player, int maxDistance) throws IllegalStateException
